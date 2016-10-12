@@ -1,6 +1,6 @@
 # ESP8266 Energymonitor
 
-My electricity meter impulse counter
+Electricity meter impulse counter
 
 ## Schemactic and BOM
 
