@@ -1,4 +1,4 @@
-ESP8266 Energymonitor
+# ESP8266 Energymonitor
 
 My electricity meter impulse counter
 
