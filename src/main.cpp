@@ -32,7 +32,11 @@ float kwMinute, kwHour, kwDay = 0.00f;
 float kwhMinute, kwhHour, kwhDay = 0.00f;
 
 int minSampleIntervalMS = 250; // At a rate of 250ms between impulses, the maxiumum power it can measure is (3600/250) = 14.4 kW. Lower value if needed.
-int flashPin = D5;
+#ifdef FLASHPIN
+  int flashPin = FLASHPIN;
+#else
+  int flashPin = D5;
+#endif
 int feedbackBlinkTimer = 30;
 
 const char *MQTTserver =  "192.168.1.85";
