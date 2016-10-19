@@ -1,5 +1,5 @@
 using namespace std;
-
+#include <FS.h>
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
@@ -8,11 +8,14 @@ using namespace std;
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>
+#include <ArduinoJson.h>
 
 unsigned long lastBlink = 0;
 unsigned long lastSend = 0;
 unsigned long lastReconnectAttempt = 0;
 bool ready = true;
+
+bool shouldSaveConfig = false;
 
 unsigned long lastGatherRealtime = 0;
 unsigned long lastGatherMinute = 0;
@@ -39,7 +42,8 @@ int minSampleIntervalMS = 250; // At a rate of 250ms between impulses, the maxiu
 #endif
 int feedbackBlinkTimer = 30;
 
-const char *MQTTserver =  "192.168.1.85";
+char mqtt_server[40] = "192.168.1.85";
+char mqtt_port[6] = "1883";
 
 string topic, errorTopic, debugTopic;
 char chipID[9];
@@ -47,7 +51,16 @@ char chipID[9];
 WiFiClient wclient;
 PubSubClient mqtt_broker(wclient);
 
+// Callback notifying us of the need to save config
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
 void setup(void) {
+
+  //SPIFFS.format();
+
   pinMode(flashPin, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH); // LED OFF
@@ -60,10 +73,86 @@ void setup(void) {
 
   Serial.begin(115200);
 
-  WiFiManager wifiManager;
-  wifiManager.autoConnect();
+  //read configuration from FS json
+  Serial.println("mounting FS...");
+  yield();
 
-  mqtt_broker.setServer(MQTTserver, 1883);
+  if (SPIFFS.begin()) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+          Serial.println("\nparsed json");
+
+          strcpy(mqtt_server, json["mqtt_server"]);
+          strcpy(mqtt_port, json["mqtt_port"]);
+
+        } else {
+          Serial.println("failed to load json config");
+        }
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+
+  WiFiManager wifiManager;
+
+  WiFiManagerParameter custom_mqtt_server("mqtt-server", "mqtt server", mqtt_server, 40);
+  wifiManager.addParameter(&custom_mqtt_server);
+
+  WiFiManagerParameter custom_mqtt_port("mqtt-port", "mqtt port", mqtt_port, 6);
+  wifiManager.addParameter(&custom_mqtt_port);
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+  //wifiManager.resetSettings();
+
+  if (!wifiManager.autoConnect("Energymonitor")) {
+    delay(3000);
+    ESP.reset();
+    delay(5000);
+  }
+
+  // Read values
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_port, custom_mqtt_port.getValue());
+
+  Serial.printf("ADRSES: '%s'", mqtt_server);
+  Serial.printf("PORT: '%s'", mqtt_port);
+
+  // Connect MQTT broker TODO: Add credentials
+  mqtt_broker.setServer(mqtt_server, atoi(mqtt_port));
+
+  //save the custom parameters to FS
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    json["mqtt_server"] = mqtt_server;
+    json["mqtt_port"] = mqtt_port;
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+    json.printTo(Serial);
+    json.printTo(configFile);
+    configFile.close();
+    //end save
+  }
 
   ArduinoOTA.onStart([]() {
     Serial.println("Start start");
@@ -225,10 +314,6 @@ void loop() {
   userFeedback();
   yield();
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected!");
-    return;
-  }
   if (!mqtt_broker.connected()) {
     unsigned long now = millis();
     if (now - lastReconnectAttempt > 5000) {
